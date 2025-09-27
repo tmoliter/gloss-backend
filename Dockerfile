@@ -30,12 +30,12 @@ COPY . .
 RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
 USER app
 
-# Expose port (Railway will set PORT env var)
-EXPOSE $PORT
+# Expose port 8000 (Railway will override with PORT env var at runtime)
+EXPOSE 8000
 
 # Health check optimized for game backend
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:$PORT/health || exit 1
+  CMD curl -f http://localhost:8000/health || exit 1
 
 # Use main.py with game optimizations
 CMD python main.py
