@@ -1,0 +1,22 @@
+# Core FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# SpaCy for high-quality NLP (morphology + lemmatization)
+spacy>=3.7.0
+spacy-lookups-data>=1.0.5
+
+# For production deployment
+gunicorn==21.2.0
+
+# Optional: requests for health checks
+requests==2.31.0
+
+# Priority language models (installed at build time for performance):
+# - es_core_news_sm (Spanish) - PRIMARY for game
+# - ja_core_news_sm (Japanese) - PRIMARY for game  
+# - en_core_web_sm (English) - for development/fallback
+#
+# Other languages can be added dynamically later as game expands
