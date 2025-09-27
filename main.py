@@ -75,8 +75,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",        # Next.js dev
+        "http://localhost:3001",        # Alternative Next.js dev port
         "https://*.vercel.app",         # Vercel deployments
         "https://vercel.app",           # Vercel domain
+        "https://*.up.railway.app",     # Railway deployments
+        "https://up.railway.app",       # Railway domain
         # Add your game domain here when deployed
     ],
     allow_credentials=True,
