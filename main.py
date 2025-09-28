@@ -198,14 +198,14 @@ class MorphemeResponse(BaseModel):
 # Conversation API Models
 class StartConversationRequest(BaseModel):
     user_id: str
-    language: str = "es"  # Default to Spanish
-    custom_prompt: str = "I am an old man who will ask you how old you are"
+    language: str
+    name: str
+    journal_words: List[str] = []
 
 class StartConversationResponse(BaseModel):
     conversation_id: str
     message: str = "Starting conversation..."
     language: str
-    custom_prompt: str
 
 class SendMessageRequest(BaseModel):
     conversation_id: str
@@ -215,7 +215,9 @@ class ConversationHistoryResponse(BaseModel):
     conversation: Optional[ConversationState]
     total_messages: int
     language: str
-    custom_prompt: str
+    character_info: str
+    conversation_instructions: str
+    journal_words: List[str] = []
 
 @app.get("/")
 async def root():
@@ -244,21 +246,20 @@ async def start_conversation(request: StartConversationRequest):
             status_code=503, 
             detail="Conversation AI not available - missing OPENAI_API_KEY"
         )
-    
+
     try:
         conversation_id = await conversation_manager.start_conversation(
             user_id=request.user_id,
             language=request.language,
-            custom_prompt=request.custom_prompt
+            name=request.name
         )
-        
+
         return StartConversationResponse(
             conversation_id=conversation_id,
-            message=f"Started conversation with prompt: {request.custom_prompt}",
+            message="Started conversation",
             language=request.language,
-            custom_prompt=request.custom_prompt
         )
-        
+
     except Exception as e:
         logger.error(f"Error starting conversation: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start conversation: {str(e)}")
@@ -293,7 +294,7 @@ async def get_conversation_history(conversation_id: str):
             status_code=503, 
             detail="Conversation AI not available - missing OPENAI_API_KEY"
         )
-    
+
     conversation = conversation_manager.get_conversation_history(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -302,7 +303,9 @@ async def get_conversation_history(conversation_id: str):
         conversation=conversation,
         total_messages=conversation.total_messages,
         language=conversation.language,
-        custom_prompt=conversation.custom_prompt
+        character_info=conversation.character_info,
+        conversation_instructions=conversation.conversation_instructions,
+        journal_words=conversation.journal_words
     )
 
 @app.delete("/conversation/{conversation_id}")

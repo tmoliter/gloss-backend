@@ -10,6 +10,11 @@ import uuid
 from datetime import datetime, timedelta
 import logging
 import asyncio
+import json
+
+from prompting.utils import get_prompt
+from prompting.prompts import get_character_prompt
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +26,10 @@ class Message(BaseModel):
 class ConversationState(BaseModel):
     conversation_id: str
     user_id: str
-    language: str = "es"
-    custom_prompt: str = ""
+    language: str
+    character_info: str
+    conversation_instructions: str
+    journal_words: List[str] = []
     messages: List[Message] = []
     created_at: datetime = Field(default_factory=datetime.now)
     last_activity: datetime = Field(default_factory=datetime.now)
@@ -47,25 +54,30 @@ class ConversationManager:
     async def start_conversation(
         self, 
         user_id: str, 
-        language: str = "es", 
-        custom_prompt: str = "I am an old man who will ask you how old you are"
+        language: str, 
+        name: str,
+        journal_words: List[str] = []
     ) -> str:
         """Start a new conversation session with custom prompt"""
         conversation_id = str(uuid.uuid4())
-        
-        # Create system message with language constraint and custom prompt
-        system_message = f"""You are roleplaying based on this prompt: "{custom_prompt}"
-        
-        IMPORTANT: You must ONLY respond in {language}. Do not use any other language.
-        Stay in character and follow the roleplay scenario described in the prompt.
-        Keep responses natural and conversational."""
-        
+
+        # Get character prompt components
+        prompt_components = get_character_prompt(name)
+        system_message = get_prompt(
+            language=language, 
+            character_info=prompt_components.character_info, 
+            conversation_instructions=prompt_components.conversation_instructions, 
+            journal_words=journal_words
+        )
+
         conversation = ConversationState(
             conversation_id=conversation_id,
             user_id=user_id,
             language=language,
-            custom_prompt=custom_prompt,
-            messages=[Message(role="system", content=system_message)]
+            messages=[Message(role="system", content=system_message)],
+            character_info=prompt_components.character_info,
+            conversation_instructions=prompt_components.conversation_instructions,
+            journal_words=journal_words
         )
         
         self.active_conversations[conversation_id] = conversation
@@ -108,31 +120,7 @@ class ConversationManager:
         )
 
     async def _generate_response(self, conversation: ConversationState) -> str:
-        """Generate natural conversation response using function calling for better roleplay"""
-        
-        # Define roleplay response tool
-        response_tool = {
-            "type": "function", 
-            "function": {
-                "name": "generate_roleplay_response",
-                "description": "Generate an appropriate response for the roleplay scenario",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "response": {
-                            "type": "string",
-                            "description": f"Response in {conversation.language} that fits the roleplay scenario"
-                        },
-                        "stays_in_character": {
-                            "type": "boolean", 
-                            "description": "Whether the response stays true to the roleplay prompt"
-                        }
-                    },
-                    "required": ["response", "stays_in_character"]
-                }
-            }
-        }
-        
+        """Generate response - simple and fast"""
         messages = [
             {"role": msg.role, "content": msg.content}
             for msg in conversation.messages
@@ -142,32 +130,22 @@ class ConversationManager:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
-                tools=[response_tool],
-                tool_choice={"type": "function", "function": {"name": "generate_roleplay_response"}},
                 max_tokens=150,
                 temperature=0.7
             )
             
-            # Extract the function call result
-            if response.choices[0].message.tool_calls:
-                tool_call = response.choices[0].message.tool_calls[0]
-                if tool_call.function.name == "generate_roleplay_response":
-                    import json
-                    result = json.loads(tool_call.function.arguments)
-                    return result["response"]
-            
-            # Fallback to regular response
-            return response.choices[0].message.content or "Lo siento, no entendí."
+            return response.choices[0].message.content or "No response generated"
             
         except Exception as e:
             logger.error(f"Error generating response: {e}")
-            return "Lo siento, tuve un problema técnico."
+            return "Sorry, I couldn't generate a response."
+        
 
     async def _validate_response(self, conversation: ConversationState, user_message: str) -> Optional[ValidationResult]:
         """Validate if user response matches the prompt expectation using OpenAI function calling"""
         
         # Define the validation tool
-        validation_tool = {
+        validation_tool= {
             "type": "function",
             "function": {
                 "name": "validate_user_response",
@@ -196,7 +174,7 @@ class ConversationManager:
         }
         
         validation_prompt = f"""
-        Roleplay context: "{conversation.custom_prompt}"
+        Roleplay context: "{conversation.conversation_instructions}"
         User's response: "{user_message}"
         
         Analyze if the user's response appropriately addresses what was expected based on the roleplay prompt.
@@ -217,7 +195,6 @@ class ConversationManager:
             if response.choices[0].message.tool_calls:
                 tool_call = response.choices[0].message.tool_calls[0]
                 if tool_call.function.name == "validate_user_response":
-                    import json
                     result = json.loads(tool_call.function.arguments)
                     
                     return ValidationResult(
