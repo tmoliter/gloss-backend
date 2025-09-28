@@ -8,13 +8,28 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 import time
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Import conversation manager
+from conversation_manager import (
+    ConversationManager, 
+    ConversationResponse,
+    ConversationState
+)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
 # Language models cache
 nlp_models = {}
+
+# Conversation manager (global instance)
+conversation_manager: Optional[ConversationManager] = None
 
 # Optimized for language learning game: Spanish and Japanese priority
 PRIORITY_LANGUAGES = {
@@ -57,10 +72,22 @@ async def preload_priority_models():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    global conversation_manager
+    
+    # Initialize conversation manager if OpenAI API key is available
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if openai_api_key:
+        conversation_manager = ConversationManager(openai_api_key)
+        logger.info("🤖 Conversation manager initialized")
+    else:
+        logger.warning("⚠️ OPENAI_API_KEY not found - conversation features disabled")
+    
     await preload_priority_models()
     logger.info("🎮 Gloss NLP Backend ready for game!")
     yield
     # Shutdown
+    if conversation_manager:
+        conversation_manager.cleanup_old_conversations()
     logger.info("🛑 Shutting down...")
 
 app = FastAPI(
@@ -71,9 +98,14 @@ app = FastAPI(
 )
 
 # Configure CORS - optimized for game deployment
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def get_cors_origins():
+    """Get CORS origins from environment or use defaults"""
+    env_origins = os.environ.get("ALLOWED_ORIGINS", "")
+    if env_origins:
+        return [origin.strip() for origin in env_origins.split(",")]
+    
+    # Default origins for development
+    return [
         "http://localhost:3000",        # Next.js dev
         "http://localhost:3001",        # Alternative Next.js dev port
         "https://gloss-brown.vercel.app",  # Your specific Vercel deployment
@@ -81,8 +113,11 @@ app.add_middleware(
         "https://vercel.app",           # Vercel domain
         "https://*.up.railway.app",     # Railway deployments
         "https://up.railway.app",       # Railway domain
-        # Add your game domain here when deployed
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],  # Added OPTIONS for preflight
     allow_headers=["*"],
@@ -160,17 +195,162 @@ class MorphemeResponse(BaseModel):
     # Legacy format for backward compatibility
     idx_to_morpheme: Dict[int, List[str]]
 
+# Conversation API Models
+class StartConversationRequest(BaseModel):
+    user_id: str
+    language: str = "es"  # Default to Spanish
+    custom_prompt: str = "I am an old man who will ask you how old you are"
+
+class StartConversationResponse(BaseModel):
+    conversation_id: str
+    message: str = "Starting conversation..."
+    language: str
+    custom_prompt: str
+
+class SendMessageRequest(BaseModel):
+    conversation_id: str
+    message: str
+
+class ConversationHistoryResponse(BaseModel):
+    conversation: Optional[ConversationState]
+    total_messages: int
+    language: str
+    custom_prompt: str
+
 @app.get("/")
 async def root():
     """Health check endpoint for game backend"""
+    conversation_status = "enabled" if conversation_manager else "disabled"
     return {
         "message": "🎮 Gloss NLP Backend - Game Ready",
         "version": "2.1.0",
         "priority_languages": list(PRIORITY_LANGUAGES.keys()),
         "all_supported": list(SUPPORTED_LANGUAGES.keys()),
         "preloaded_models": [lang for lang, model in nlp_models.items() if model is not None],
-        "features": ["morphology", "lemmatization", "game_optimized"]
+        "features": ["morphology", "lemmatization", "conversations", "game_optimized"],
+        "conversation_ai": conversation_status
     }
+
+# =============================================================================
+# CONVERSATION AI ENDPOINTS
+# =============================================================================
+
+@app.post("/conversation/start", response_model=StartConversationResponse)
+async def start_conversation(request: StartConversationRequest):
+    # return "hi"
+    """Start a new AI conversation session with custom prompt"""
+    if not conversation_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Conversation AI not available - missing OPENAI_API_KEY"
+        )
+    
+    try:
+        conversation_id = await conversation_manager.start_conversation(
+            user_id=request.user_id,
+            language=request.language,
+            custom_prompt=request.custom_prompt
+        )
+        
+        return StartConversationResponse(
+            conversation_id=conversation_id,
+            message=f"Started conversation with prompt: {request.custom_prompt}",
+            language=request.language,
+            custom_prompt=request.custom_prompt
+        )
+        
+    except Exception as e:
+        logger.error(f"Error starting conversation: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start conversation: {str(e)}")
+
+@app.post("/conversation/message", response_model=ConversationResponse)
+async def send_message(request: SendMessageRequest):
+    """Send a message in an active conversation"""
+    if not conversation_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Conversation AI not available - missing OPENAI_API_KEY"
+        )
+    
+    try:
+        response = await conversation_manager.send_message(
+            conversation_id=request.conversation_id,
+            user_message=request.message
+        )
+        return response
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+
+@app.get("/conversation/{conversation_id}/history", response_model=ConversationHistoryResponse)
+async def get_conversation_history(conversation_id: str):
+    """Get conversation history and state"""
+    if not conversation_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Conversation AI not available - missing OPENAI_API_KEY"
+        )
+    
+    conversation = conversation_manager.get_conversation_history(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return ConversationHistoryResponse(
+        conversation=conversation,
+        total_messages=conversation.total_messages,
+        language=conversation.language,
+        custom_prompt=conversation.custom_prompt
+    )
+
+@app.delete("/conversation/{conversation_id}")
+async def end_conversation(conversation_id: str):
+    """End and clean up a conversation"""
+    if not conversation_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Conversation AI not available"
+        )
+    
+    if conversation_id in conversation_manager.active_conversations:
+        del conversation_manager.active_conversations[conversation_id]
+        return {"message": "Conversation ended successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+@app.get("/conversation/examples")
+async def get_conversation_examples():
+    """Get example conversation prompts"""
+    return {
+        "examples": [
+            {
+                "language": "es",
+                "prompt": "I am an old man who will ask you how old you are",
+                "description": "Simple age question roleplay"
+            },
+            {
+                "language": "es", 
+                "prompt": "I am a waiter at a restaurant and you are ordering food",
+                "description": "Restaurant ordering scenario"
+            },
+            {
+                "language": "es",
+                "prompt": "I am asking for directions to the library",
+                "description": "Asking for directions"
+            },
+            {
+                "language": "ja",
+                "prompt": "I am a shop clerk greeting customers",
+                "description": "Shop greeting in Japanese"
+            }
+        ]
+    }
+
+# =============================================================================
+# NLP ENDPOINTS
+# =============================================================================
 
 @app.get("/health")
 async def health_check():
