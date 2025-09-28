@@ -76,14 +76,15 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",        # Next.js dev
         "http://localhost:3001",        # Alternative Next.js dev port
-        "https://*.vercel.app",         # Vercel deployments
+        "https://gloss-brown.vercel.app",  # Your specific Vercel deployment
+        "https://*.vercel.app",         # Vercel deployments (backup)
         "https://vercel.app",           # Vercel domain
         "https://*.up.railway.app",     # Railway deployments
         "https://up.railway.app",       # Railway domain
         # Add your game domain here when deployed
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],      # Only what we need
+    allow_methods=["GET", "POST", "OPTIONS"],  # Added OPTIONS for preflight
     allow_headers=["*"],
 )
 
