@@ -38,13 +38,14 @@ class ConversationState(BaseModel):
     total_messages: int = 0
 
 class ValidationResult(BaseModel):
+    name: str
     is_valid: bool
     reason: str
     confidence: float = Field(ge=0.0, le=1.0)
 
 class ConversationResponse(BaseModel):
     message: str
-    validation_result: Optional[ValidationResult] = None
+    validation_results: List[ValidationResult]
     conversation_id: str
     processing_time_ms: float
 
@@ -107,7 +108,7 @@ class ConversationManager:
         response_content = await self._generate_response(conversation)
         
         # Optional: Validate if user answered the prompt correctly
-        validation_result = await self._validate_response(conversation, user_message)
+        validation_results = await self._validate_response(conversation, user_message)
         
         # Add assistant response
         assistant_msg = Message(role="assistant", content=response_content)
@@ -117,7 +118,7 @@ class ConversationManager:
         
         return ConversationResponse(
             message=response_content,
-            validation_result=validation_result,
+            validation_results=validation_results,
             conversation_id=conversation_id,
             processing_time_ms=round(processing_time, 2)
         )
@@ -144,12 +145,12 @@ class ConversationManager:
             return "Sorry, I couldn't generate a response."
         
 
-    async def _validate_response(self, conversation: ConversationState, user_message: str) -> Optional[ValidationResult]:
+    async def _validate_response(self, conversation: ConversationState, user_message: str) -> List[ValidationResult]:
         """Validate if user response matches the prompt expectation using OpenAI function calling"""
         unfulfilled_tools = [tool for tool in conversation.tools if tool.fulfilled == False]
         
         if not unfulfilled_tools:
-            return None  # No validation needed if all tools are fulfilled
+            return []  # No validation needed if all tools are fulfilled
 
         # Create one validation function per unfulfilled tool
         validation_tools = [{
@@ -200,36 +201,36 @@ class ConversationManager:
                 max_tokens=150,
                 temperature=0.1
             )
-            
+            validation_results: List[ValidationResult] = []
             # Process the tool calls
             if response.choices[0].message.tool_calls:
                 # Take the first tool call result
-                tool_call = response.choices[0].message.tool_calls[0]
-                result = json.loads(tool_call.function.arguments)
-                
-                # Mark the specific tool as fulfilled if valid
-                if result["is_valid"]:
-                    for tool in conversation.tools:
-                        if tool.name == tool_call.function.name:
-                            tool.fulfilled = True
-                            logger.info(f"✅ Tool '{tool.name}' marked as fulfilled")
-                            break
-                
-                return ValidationResult(
-                    is_valid=result["is_valid"],
-                    reason=f"[{tool_call.function.name}] {result['reason']}",
-                    confidence=result["confidence"]
-                )
-            
-            return None  # No validation needed
+                for tool_call in response.choices[0].message.tool_calls:
+                    result = json.loads(tool_call.function.arguments)
+                    tool_call_name = tool_call.function.name
+                    
+                    # Mark the specific tool as fulfilled if valid
+                    if result["is_valid"]:
+                        for tool in conversation.tools:
+                            if tool.name == tool_call_name:
+                                tool.fulfilled = True
+                                logger.info(f"Tool '{tool.name}' marked as fulfilled")
+                                break
+
+                    validation_results.append(
+                        ValidationResult(
+                            name=tool_call_name,
+                            is_valid=result["is_valid"],
+                            reason=f"[{tool_call_name}] {result['reason']}",
+                            confidence=result["confidence"]
+                        )
+                    )
+
+            return validation_results
             
         except Exception as e:
             logger.error(f"Error validating response: {e}")
-            return ValidationResult(
-                is_valid=False,
-                reason=f"Validation error: {str(e)}",
-                confidence=0.0
-            )
+            return []
 
     def get_conversation_history(self, conversation_id: str) -> Optional[ConversationState]:
         """Get conversation history"""
