@@ -13,7 +13,8 @@ import asyncio
 import json
 
 from prompting.utils import get_prompt
-from prompting.prompts import get_character_prompt
+from prompting.prompts import ToolCall, get_character_prompt
+from utils import language_map
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class ConversationState(BaseModel):
     character_info: str
     conversation_instructions: str
     journal_words: List[str] = []
+    tools: List[ToolCall] = []
     messages: List[Message] = []
     created_at: datetime = Field(default_factory=datetime.now)
     last_activity: datetime = Field(default_factory=datetime.now)
@@ -77,7 +79,8 @@ class ConversationManager:
             messages=[Message(role="system", content=system_message)],
             character_info=prompt_components.character_info,
             conversation_instructions=prompt_components.conversation_instructions,
-            journal_words=journal_words
+            journal_words=journal_words,
+            tools=prompt_components.tools
         )
         
         self.active_conversations[conversation_id] = conversation
@@ -143,19 +146,23 @@ class ConversationManager:
 
     async def _validate_response(self, conversation: ConversationState, user_message: str) -> Optional[ValidationResult]:
         """Validate if user response matches the prompt expectation using OpenAI function calling"""
+        unfulfilled_tools = [tool for tool in conversation.tools if tool.fulfilled == False]
         
-        # Define the validation tool
-        validation_tool= {
+        if not unfulfilled_tools:
+            return None  # No validation needed if all tools are fulfilled
+
+        # Create one validation function per unfulfilled tool
+        validation_tools = [{
             "type": "function",
             "function": {
-                "name": "validate_user_response",
-                "description": "Validate if the user's response appropriately addresses what was asked in the roleplay prompt",
+                "name": tool.name,  # Each tool has its unique name
+                "description": f"Validate if user response meets this condition: {tool.condition}",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "is_valid": {
                             "type": "boolean",
-                            "description": "True if the user appropriately responded to the prompt, False otherwise"
+                            "description": "True if the condition is met, False otherwise"
                         },
                         "reason": {
                             "type": "string", 
@@ -171,44 +178,50 @@ class ConversationManager:
                     "required": ["is_valid", "reason", "confidence"]
                 }
             }
-        }
+        } for tool in unfulfilled_tools]
         
-        validation_prompt = f"""
-        Roleplay context: "{conversation.conversation_instructions}"
-        User's response: "{user_message}"
-        
-        Analyze if the user's response appropriately addresses what was expected based on the roleplay prompt.
-        Consider context, relevance, and whether they're engaging with the scenario as intended.
-        """
+        validation_prompt = f"""Evaluate the user's response against these conditions:
+
+    Conditions to check:
+    {chr(10).join([f"- {tool.name}: {tool.condition}" for tool in unfulfilled_tools])}
+
+    User's response: "{user_message}"
+    Target language: "{language_map[conversation.language]}"
+
+    Call the appropriate validation function(s) for any conditions that the user's response addresses.
+    The response must be entirely in understandable {language_map[conversation.language]}."""
         
         try:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": validation_prompt}],
-                tools=[validation_tool],
-                tool_choice={"type": "function", "function": {"name": "validate_user_response"}},
+                tools=validation_tools,
+                # No tool_choice - let OpenAI decide which tools to call
                 max_tokens=150,
                 temperature=0.1
             )
             
-            # Extract the function call result
+            # Process the tool calls
             if response.choices[0].message.tool_calls:
+                # Take the first tool call result
                 tool_call = response.choices[0].message.tool_calls[0]
-                if tool_call.function.name == "validate_user_response":
-                    result = json.loads(tool_call.function.arguments)
-                    
-                    return ValidationResult(
-                        is_valid=result["is_valid"],
-                        reason=result["reason"],
-                        confidence=result["confidence"]
-                    )
+                result = json.loads(tool_call.function.arguments)
+                
+                # Mark the specific tool as fulfilled if valid
+                if result["is_valid"]:
+                    for tool in conversation.tools:
+                        if tool.name == tool_call.function.name:
+                            tool.fulfilled = True
+                            logger.info(f"✅ Tool '{tool.name}' marked as fulfilled")
+                            break
+                
+                return ValidationResult(
+                    is_valid=result["is_valid"],
+                    reason=f"[{tool_call.function.name}] {result['reason']}",
+                    confidence=result["confidence"]
+                )
             
-            # Fallback if no tool call
-            return ValidationResult(
-                is_valid=False,
-                reason="Unable to validate response",
-                confidence=0.0
-            )
+            return None  # No validation needed
             
         except Exception as e:
             logger.error(f"Error validating response: {e}")

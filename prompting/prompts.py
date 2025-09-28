@@ -1,10 +1,18 @@
 
+from typing import List
 from pydantic import BaseModel
+
+class ToolCall(BaseModel):
+    name: str
+    description: str
+    condition: str
+    fulfilled: bool = False
 
 
 class PromptComponents(BaseModel):
     character_info: str
     conversation_instructions: str
+    tools: List[ToolCall]
 
 ### THIS IS ALL GOING TO LIVE IN A CMS LATER
 def get_character_prompt(character_name: str) -> PromptComponents:
@@ -28,7 +36,24 @@ Who sent them? Answer: 桜
 Where did they come from? Answer: 大阪
 How old are they? Any answer is acceptable
 If you receive satisfactory answers to the above questions, then you should tell them that the rune is buried beneath the 光の石. Once this information is given, you are welcome to continue to answer questions, but you should be remind the visitor that the rune is in beneath the 光の石 and that they should search for it if they wish to find it.
-"""
+""",
+            tools=[
+                ToolCall(
+                    name="who_sent_them",
+                    description="Use this tool if the user has told you who sent them",
+                    condition="The user has clearly mentioned that 桜 sent them",
+                ),
+                ToolCall(
+                    name="how_old",
+                    description="Use this tool if the user has told you how old they are",
+                    condition="The user has clearly mentioned their age",
+                ),
+                ToolCall(
+                    name="where_from",
+                    description="Use this tool if the user has told you where they are from",
+                    condition="The user has clearly mentioned that they came from 大阪",
+                )
+            ]
         )
     }
     try:
