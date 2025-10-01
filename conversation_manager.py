@@ -42,7 +42,6 @@ class ValidationResult(BaseModel):
     name: str
     is_valid: bool
     reason: str
-    confidence: float = Field(ge=0.0, le=1.0)
 
 class ConversationResponse(BaseModel):
     message: str
@@ -120,10 +119,8 @@ class ConversationManager:
         try:
             morphemes = self.nlp.get_morphemes(response_content, conversation.language)
         except Exception as e:
-            print("WTF?!?!")
-            print(str(e))
+            logger.error(f"Error getting morphemes: {e}")
             raise e
-            morphemes = None
 
         processing_time = (asyncio.get_event_loop().time() - start_time) * 1000
         
@@ -170,6 +167,7 @@ class ConversationManager:
             "function": {
                 "name": tool.name,  # Each tool has its unique name
                 "description": f"Validate if user response meets this condition: {tool.condition}",
+                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -179,16 +177,11 @@ class ConversationManager:
                         },
                         "reason": {
                             "type": "string", 
-                            "description": "Brief explanation of why the response is valid or invalid"
+                            "description": "Brief explanation of why the response is valid or invalid   ."
                         },
-                        "confidence": {
-                            "type": "number",
-                            "minimum": 0.0,
-                            "maximum": 1.0,
-                            "description": "Confidence level in the validation (0.0 to 1.0)"
-                        }
                     },
-                    "required": ["is_valid", "reason", "confidence"]
+                    "required": ["is_valid", "reason"],
+                    "additionalProperties": False,
                 }
             }
         } for tool in unfulfilled_tools]
@@ -234,7 +227,6 @@ class ConversationManager:
                             name=tool_call_name,
                             is_valid=result["is_valid"],
                             reason=f"[{tool_call_name}] {result['reason']}",
-                            confidence=result["confidence"]
                         )
                     )
 

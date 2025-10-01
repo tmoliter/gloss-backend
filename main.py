@@ -36,7 +36,7 @@ async def preload_priority_models():
     logger.info("🚀 Preloading priority language models for game...")
     
     for lang, model_name in nlp.PRIORITY_LANGUAGES.items():
-        print(f"Loading model for language: {lang}")
+        logger.info(f"Loading model for language: {lang}")
         try:
             start_time = time.time()
             nlp.models[lang] = spacy.load(model_name)

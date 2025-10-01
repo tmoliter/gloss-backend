@@ -49,11 +49,8 @@ class NaturalLanguageProcessor():
 
     def load_language_model(self, language: str) -> spacy.language.Language:
         """Load and cache a SpaCy language model with game-optimized error handling"""
-        print("AAAA")
         if language not in self.models:
-            print("BBBB")
             if language not in self.SUPPORTED_LANGUAGES:
-                print("CCCC")
                 raise HTTPException(
                     status_code=400, 
                     detail=f"Language '{language}' not supported. Supported: {list(self.SUPPORTED_LANGUAGES.keys())}"
@@ -72,21 +69,15 @@ class NaturalLanguageProcessor():
         
         return self.models[language]
 
-    def get_morphemes(self, text: str, language: str):
-        print(f"{text} ----- {language}")
+    def get_morphemes(self, text: str, language: str) -> MorphemeResponse:
         start_time = time.time()
 
-        print(1)
         language_model = self.load_language_model(language)
-        print(2)
         doc = language_model(text)
-        print(3)
         morphemes = []
         idx_to_morpheme = {}  # Legacy compatibility
         
         for token in doc:
-            print("AY!")
-            print(token)
             if token.is_space or token.is_punct:
                 continue
             
