@@ -9,6 +9,7 @@ import os
 from contextlib import asynccontextmanager
 import time
 from dotenv import load_dotenv
+from nlp import MorphemeResponse, NaturalLanguageProcessor
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,59 +26,46 @@ log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
-# Language models cache
-nlp_models = {}
-
-# Conversation manager (global instance)
+# Globals
 conversation_manager: Optional[ConversationManager] = None
+nlp: Optional[NaturalLanguageProcessor] = None
 
-# Optimized for language learning game: Spanish and Japanese priority
-PRIORITY_LANGUAGES = {
-    "es": "es_core_news_sm",  # Spanish - primary
-    "ja": "ja_core_news_sm",  # Japanese - primary
-}
-
-SUPPORTED_LANGUAGES = {
-    "en": "en_core_web_sm",   # English - fallback/development
-    "es": "es_core_news_sm",  # Spanish - primary
-    "ja": "ja_core_news_sm",  # Japanese - primary
-    "fr": "fr_core_news_sm",  # French - can be added later
-    "de": "de_core_news_sm",  # German - can be added later
-    "zh": "zh_core_web_sm",   # Chinese - can be added later
-}
 
 async def preload_priority_models():
     """Preload Spanish and Japanese models at startup for game performance"""
     logger.info("🚀 Preloading priority language models for game...")
     
-    for lang, model_name in PRIORITY_LANGUAGES.items():
+    for lang, model_name in nlp.PRIORITY_LANGUAGES.items():
+        print(f"Loading model for language: {lang}")
         try:
             start_time = time.time()
-            nlp_models[lang] = spacy.load(model_name)
+            nlp.models[lang] = spacy.load(model_name)
             load_time = time.time() - start_time
             logger.info(f"✅ Loaded {model_name} in {load_time:.2f}s")
         except OSError:
             logger.warning(f"⚠️ {model_name} not found - install with: python -m spacy download {model_name}")
-            nlp_models[lang] = None
+            nlp.models[lang] = None
     
     # Warm up models with test text for even faster first requests
-    if nlp_models.get("es"):
-        nlp_models["es"]("Hola mundo")
+    if nlp.models.get("es"):
+        nlp.models["es"]("Hola mundo")
         logger.info("🔥 Spanish model warmed up")
-    
-    if nlp_models.get("ja"):
-        nlp_models["ja"]("こんにちは")
+
+    if nlp.models.get("ja"):
+        nlp.models["ja"]("こんにちは")
         logger.info("🔥 Japanese model warmed up")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     global conversation_manager
-    
+    global nlp
+    nlp = NaturalLanguageProcessor()
+
     # Initialize conversation manager if OpenAI API key is available
     openai_api_key = os.environ.get("OPENAI_API_KEY")
     if openai_api_key:
-        conversation_manager = ConversationManager(openai_api_key)
+        conversation_manager = ConversationManager(openai_api_key, nlp)
         logger.info("🤖 Conversation manager initialized")
     else:
         logger.warning("⚠️ OPENAI_API_KEY not found - conversation features disabled")
@@ -123,29 +111,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def load_language_model(language: str):
-    """Load and cache a SpaCy language model with game-optimized error handling"""
-    if language not in nlp_models:
-        if language not in SUPPORTED_LANGUAGES:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Language '{language}' not supported. Supported: {list(SUPPORTED_LANGUAGES.keys())}"
-            )
-        
-        model_name = SUPPORTED_LANGUAGES[language]
-        try:
-            start_time = time.time()
-            nlp_models[language] = spacy.load(model_name)
-            load_time = time.time() - start_time
-            logger.info(f"📚 Loaded {model_name} in {load_time:.2f}s")
-        except OSError:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Language model '{model_name}' not available. Install with: python -m spacy download {model_name}"
-            )
-    
-    return nlp_models[language]
-
 # Request/Response models optimized for language learning game
 class TokenizeRequest(BaseModel):
     text: str
@@ -180,20 +145,6 @@ class MorphemeRequest(BaseModel):
     language: str = "es"  # Default to Spanish
     include_features: bool = True  # Morphological features are key for language learning
 
-class MorphemeInfo(BaseModel):
-    token_text: str
-    lemma: str
-    morphological_features: List[str]  # e.g., ["Tense:Past", "Number:Sing"]
-    token_index: int
-
-class MorphemeResponse(BaseModel):
-    morphemes: List[MorphemeInfo]
-    original_text: str
-    language: str
-    processing_time_ms: float
-    
-    # Legacy format for backward compatibility
-    idx_to_morpheme: Dict[int, List[str]]
 
 # Conversation API Models
 class StartConversationRequest(BaseModel):
@@ -223,12 +174,13 @@ class ConversationHistoryResponse(BaseModel):
 async def root():
     """Health check endpoint for game backend"""
     conversation_status = "enabled" if conversation_manager else "disabled"
+    nlp = NaturalLanguageProcessor()
     return {
         "message": "🎮 Gloss NLP Backend - Game Ready",
         "version": "2.1.0",
-        "priority_languages": list(PRIORITY_LANGUAGES.keys()),
-        "all_supported": list(SUPPORTED_LANGUAGES.keys()),
-        "preloaded_models": [lang for lang, model in nlp_models.items() if model is not None],
+        "priority_languages": list(nlp.PRIORITY_LANGUAGES.keys()),
+        "all_supported": list(nlp.SUPPORTED_LANGUAGES.keys()),
+        "preloaded_models": [lang for lang, model in nlp.models.items() if model is not None],
         "features": ["morphology", "lemmatization", "conversations", "game_optimized"],
         "conversation_ai": conversation_status
     }
@@ -355,17 +307,6 @@ async def get_conversation_examples():
 # NLP ENDPOINTS
 # =============================================================================
 
-@app.get("/health")
-async def health_check():
-    """Detailed health check for monitoring"""
-    return {
-        "status": "healthy",
-        "preloaded_models": [lang for lang, model in nlp_models.items() if model is not None],
-        "supported_languages": list(SUPPORTED_LANGUAGES.keys()),
-        "priority_languages": list(PRIORITY_LANGUAGES.keys()),
-        "ready_for_game": len([model for model in nlp_models.values() if model is not None]) >= 1
-    }
-
 @app.post("/tokenize", response_model=TokenizeResponse)
 async def tokenize_text(request: TokenizeRequest):
     """
@@ -374,9 +315,10 @@ async def tokenize_text(request: TokenizeRequest):
     """
     start_time = time.time()
     
+
     try:
-        nlp = load_language_model(request.language)
-        doc = nlp(request.text)
+        language_model = nlp.load_language_model(request.language)
+        doc = language_model(request.text)
         
         tokens = []
         for token in doc:
@@ -432,49 +374,8 @@ async def extract_morphemes(request: MorphemeRequest):
     Extract detailed morphological information optimized for language learning
     Perfect for understanding grammar patterns in Spanish and Japanese
     """
-    start_time = time.time()
-    
     try:
-        nlp = load_language_model(request.language)
-        doc = nlp(request.text)
-        
-        morphemes = []
-        idx_to_morpheme = {}  # Legacy compatibility
-        
-        for token in doc:
-            if token.is_space or token.is_punct:
-                continue
-            
-            # Collect morphological features for language learning
-            features = []
-            if token.morph:
-                for feature, value in token.morph.to_dict().items():
-                    features.append(f"{feature}:{value}")
-            
-            morpheme_info = MorphemeInfo(
-                token_text=token.text,
-                lemma=token.lemma_,
-                morphological_features=features,
-                token_index=token.idx
-            )
-            morphemes.append(morpheme_info)
-            
-            # Legacy format for backward compatibility
-            idx_to_morpheme[token.idx] = [token.lemma_] + features
-        
-        processing_time = (time.time() - start_time) * 1000
-        
-        if processing_time > 100:
-            logger.warning(f"⚠️ Slow morpheme extraction: {processing_time:.2f}ms")
-        
-        return MorphemeResponse(
-            morphemes=morphemes,
-            original_text=request.text,
-            language=request.language,
-            processing_time_ms=round(processing_time, 2),
-            idx_to_morpheme=idx_to_morpheme  # Legacy compatibility
-        )
-        
+        return nlp.get_morphemes(request.text, request.language)
     except Exception as e:
         logger.error(f"💥 Error extracting morphemes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing text: {str(e)}")
@@ -486,13 +387,13 @@ async def get_supported_languages():
         "priority_languages": {
             lang: {
                 "model": model_name,
-                "loaded": nlp_models.get(lang) is not None,
-                "status": "ready" if nlp_models.get(lang) is not None else "needs_download"
+                "loaded": nlp.models.get(lang) is not None,
+                "status": "ready" if nlp.models.get(lang) is not None else "needs_download"
             }
-            for lang, model_name in PRIORITY_LANGUAGES.items()
+            for lang, model_name in nlp.PRIORITY_LANGUAGES.items()
         },
-        "all_supported": SUPPORTED_LANGUAGES,
-        "currently_loaded": [lang for lang, model in nlp_models.items() if model is not None]
+        "all_supported": nlp.SUPPORTED_LANGUAGES,
+        "currently_loaded": [lang for lang, model in nlp.models.items() if model is not None]
     }
 
 @app.post("/preload/{language}")
@@ -500,14 +401,14 @@ async def preload_language_model(language: str):
     """Preload a specific language model for game optimization"""
     try:
         start_time = time.time()
-        load_language_model(language)
+        nlp.load_language_model(language)
         load_time = (time.time() - start_time) * 1000
         
         return {
             "language": language,
             "status": "loaded",
             "load_time_ms": round(load_time, 2),
-            "message": f"🚀 Model {SUPPORTED_LANGUAGES[language]} ready for game!"
+            "message": f"🚀 Model {nlp.SUPPORTED_LANGUAGES[language]} ready for game!"
         }
     except HTTPException:
         raise

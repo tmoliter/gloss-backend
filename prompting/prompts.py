@@ -35,7 +35,7 @@ If the visitor asks you about the location of the rune, you should ask them the 
 Who sent them? Answer: 桜
 Where did they come from? Answer: 大阪
 How old are they? Any answer is acceptable
-If you receive satisfactory answers to the above questions, then you should tell them that the rune is buried beneath the 光の石. Once this information is given, you are welcome to continue to answer questions, but you should be remind the visitor that the rune is in beneath the 光の石 and that they should search for it if they wish to find it.
+If you receive satisfactorey answers to the above questions, then you should tell them that the rune is buried beneath the 光の石. Once this information is given, you are welcome to continue to answer questions, but you should be remind the visitor that the rune is in beneath the 光の石 and that they should search for it if they wish to find it.
 """,
             tools=[
                 ToolCall(

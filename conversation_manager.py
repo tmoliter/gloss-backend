@@ -5,6 +5,7 @@ Provides AI-powered conversations with custom prompts and validation tool calls
 
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
+from nlp import MorphemeResponse, NaturalLanguageProcessor
 from openai import AsyncOpenAI
 import uuid
 from datetime import datetime, timedelta
@@ -48,11 +49,13 @@ class ConversationResponse(BaseModel):
     validation_results: List[ValidationResult]
     conversation_id: str
     processing_time_ms: float
+    morphemes: MorphemeResponse
 
 class ConversationManager:
-    def __init__(self, openai_api_key: str):
+    def __init__(self, openai_api_key: str, nlp: NaturalLanguageProcessor):
         self.client = AsyncOpenAI(api_key=openai_api_key)
         self.active_conversations: Dict[str, ConversationState] = {}
+        self.nlp = nlp
 
     async def start_conversation(
         self, 
@@ -113,14 +116,23 @@ class ConversationManager:
         # Add assistant response
         assistant_msg = Message(role="assistant", content=response_content)
         conversation.messages.append(assistant_msg)
-        
+
+        try:
+            morphemes = self.nlp.get_morphemes(response_content, conversation.language)
+        except Exception as e:
+            print("WTF?!?!")
+            print(str(e))
+            raise e
+            morphemes = None
+
         processing_time = (asyncio.get_event_loop().time() - start_time) * 1000
         
         return ConversationResponse(
             message=response_content,
             validation_results=validation_results,
             conversation_id=conversation_id,
-            processing_time_ms=round(processing_time, 2)
+            processing_time_ms=round(processing_time, 2),
+            morphemes=morphemes
         )
 
     async def _generate_response(self, conversation: ConversationState) -> str:
