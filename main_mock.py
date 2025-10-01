@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 # Language models cache
-nlp_models = {}
+models = {}
 
 # Mock tokenization for testing without models
 def mock_tokenize(text: str, language: str):
@@ -99,7 +99,7 @@ async def health_check():
     return {
         "status": "healthy",
         "mode": "mock",
-        "loaded_models": list(nlp_models.keys()),
+        "loaded_models": list(models.keys()),
         "note": "Run with spaCy models for full functionality"
     }
 
@@ -154,7 +154,7 @@ async def get_supported_languages():
             "es": "es_core_news_sm (not loaded - using mock)",
             "ja": "ja_core_news_sm (not loaded - using mock)"
         },
-        "loaded": list(nlp_models.keys()),
+        "loaded": list(models.keys()),
         "note": "Install spaCy models for full functionality"
     }
 
