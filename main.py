@@ -185,6 +185,17 @@ async def root():
         "conversation_ai": conversation_status
     }
 
+@app.get("/health")
+async def health_check():
+    """Detailed health check for monitoring"""
+    return {
+        "status": "healthy",
+        "preloaded_models": [lang for lang, model in nlp.models.items() if model is not None],
+        "supported_languages": list(nlp.SUPPORTED_LANGUAGES.keys()),
+        "priority_languages": list(nlp.PRIORITY_LANGUAGES.keys()),
+        "ready_for_game": len([model for model in nlp.models.values() if model is not None]) >= 1
+    }
+
 # =============================================================================
 # CONVERSATION AI ENDPOINTS
 # =============================================================================
