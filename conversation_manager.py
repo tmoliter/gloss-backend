@@ -116,9 +116,11 @@ class ConversationManager:
         # Add complete response to conversation history
         assistant_msg = Message(role="assistant", content=full_response)
         conversation.messages.append(assistant_msg)
+
+        validation_results = await self._validate_response(conversation, full_response)
         
         # Send completion signal
-        yield f"data: {json.dumps({'type': 'complete', 'conversation_id': conversation_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'complete', 'conversation_id': conversation_id, 'validation_results': json.dumps([validation_result.model_dump() for validation_result in validation_results])})}\n\n"
 
     async def _generate_stream_response(self, conversation: ConversationState) -> AsyncGenerator[str, None]:
         """Generate streaming response from OpenAI"""
