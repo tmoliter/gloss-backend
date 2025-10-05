@@ -3,7 +3,7 @@ Simple Conversation Manager
 Provides AI-powered conversations with custom prompts and validation tool calls
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, AsyncGenerator
 from pydantic import BaseModel, Field
 from nlp import MorphemeResponse, NaturalLanguageProcessor
 from openai import AsyncOpenAI
@@ -90,6 +90,67 @@ class ConversationManager:
         logger.info(f"🎯 Started conversation in {language} for user {user_id}")
         
         return conversation_id
+
+    async def send_message_stream(self, conversation_id: str, user_message: str) -> AsyncGenerator[str, None]:
+        """Send a message and stream AI response using Server-Sent Events"""
+        if conversation_id not in self.active_conversations:
+            yield f"data: {json.dumps({'error': f'Conversation {conversation_id} not found'})}\n\n"
+            return
+        
+        conversation = self.active_conversations[conversation_id]
+        
+        # Add user message
+        user_msg = Message(role="user", content=user_message)
+        conversation.messages.append(user_msg)
+        conversation.total_messages += 1
+        conversation.last_activity = datetime.now()
+
+        # Start validation as async task (don't await yet)
+        validation_task = asyncio.create_task(
+            self._validate_response(conversation, user_message)
+        )
+        
+        # Stream AI response
+        full_response = ""
+        async for chunk in self._generate_stream_response(conversation):
+            if chunk:
+                full_response += chunk
+                # Send SSE formatted data
+                yield f"data: {json.dumps({'chunk': chunk, 'type': 'content'})}\n\n"
+        
+        # Add complete response to conversation history
+        assistant_msg = Message(role="assistant", content=full_response)
+        conversation.messages.append(assistant_msg)
+
+        # Now await the validation results (should be done or nearly done)
+        validation_results = await validation_task
+        
+        # Send completion signal
+        yield f"data: {json.dumps({'type': 'complete', 'conversation_id': conversation_id, 'validation_results': json.dumps([validation_result.model_dump() for validation_result in validation_results])})}\n\n"
+
+    async def _generate_stream_response(self, conversation: ConversationState) -> AsyncGenerator[str, None]:
+        """Generate streaming response from OpenAI"""
+        messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in conversation.messages
+        ]
+        
+        try:
+            stream = await self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=150,
+                temperature=0.7,
+                stream=True
+            )
+            
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                    
+        except Exception as e:
+            logger.error(f"Error generating streaming response: {e}")
+            yield f"Sorry, I couldn't generate a response: {str(e)}"
 
     async def send_message(self, conversation_id: str, user_message: str) -> ConversationResponse:
         """Send a message and get AI response with optional validation"""
