@@ -1,10 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import spacy
 from typing import List, Dict, Optional
 import logging
-import asyncio
 import os
 from contextlib import asynccontextmanager
 import time
@@ -248,6 +248,39 @@ async def send_message(request: SendMessageRequest):
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+
+@app.post("/conversation/stream")
+async def send_message_stream(request: SendMessageRequest):
+    """Send a message and stream the AI response using Server-Sent Events"""
+    if not conversation_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Conversation AI not available - missing OPENAI_API_KEY"
+        )
+    
+    try:
+        async def generate_stream():
+            async for chunk in conversation_manager.send_message_stream(
+                conversation_id=request.conversation_id,
+                user_message=request.message
+            ):
+                yield chunk
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error streaming message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stream message: {str(e)}")
 
 @app.get("/conversation/{conversation_id}/history", response_model=ConversationHistoryResponse)
 async def get_conversation_history(conversation_id: str):
